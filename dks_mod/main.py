@@ -29,15 +29,14 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized at %s", settings.db_path)
 
-    # Start gRPC event listeners for active servers
-    from dks_mod.events import start_listeners
-    await start_listeners()
+    # Start gRPC event streams for all active servers
+    from dks_mod.grpc_client import start_all_streams, stop_all_streams
+    await start_all_streams()
 
     yield
 
     # Shutdown
-    from dks_mod.events import stop_listeners
-    await stop_listeners()
+    await stop_all_streams()
     await close_db()
     logger.info("DKS_mod shut down.")
 
@@ -92,11 +91,13 @@ async def log_requests(request: Request, call_next):
 from dks_mod.auth import router as auth_router
 from dks_mod.events import router as events_router
 from dks_mod.olympus import router as olympus_router
+from dks_mod.servers import router as servers_router
 from dks_mod.tacview import router as tacview_router
 from dks_mod.webhooks import router as webhooks_router
 
 app.include_router(auth_router, prefix=settings.api_prefix)
 app.include_router(webhooks_router, prefix=settings.api_prefix)
+app.include_router(servers_router, prefix=settings.api_prefix)
 app.include_router(events_router, prefix=settings.api_prefix)
 app.include_router(tacview_router, prefix=settings.api_prefix)
 app.include_router(olympus_router, prefix=settings.api_prefix)

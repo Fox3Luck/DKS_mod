@@ -8,3 +8,4 @@ grpcio>=1.62.0
 grpcio-tools>=1.62.0
 python-multipart>=0.0.9
 cryptography>=42.0.0
+slowapi>=0.1.9

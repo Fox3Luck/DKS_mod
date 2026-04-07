@@ -5,13 +5,18 @@ import json
 import secrets
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.security import APIKeyHeader
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from dks_mod.database import get_db
 from dks_mod.models import TokenCreate, TokenInfo, TokenResponse
 
 router = APIRouter(prefix="/tokens", tags=["auth"])
+
+# Stricter rate limit for auth endpoints
+_limiter = Limiter(key_func=get_remote_address)
 
 # Admin key for token management (set via env var)
 ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-Key", auto_error=False)
@@ -68,7 +73,8 @@ def require_server_access(server_id: str, token: dict):
 # --- Admin endpoints for token management ---
 
 @router.post("", response_model=TokenResponse)
-async def create_token(body: TokenCreate, _=Depends(verify_admin_key)):
+@_limiter.limit("10/minute")
+async def create_token(request: Request, body: TokenCreate, _=Depends(verify_admin_key)):
     """Create a new API token (admin only)."""
     db = await get_db()
     raw_token = f"dks_{secrets.token_urlsafe(32)}"

@@ -1,10 +1,15 @@
 """DKS_mod — Fox3 DCS x Digital Kneeboard Simulator Integration API."""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from dks_mod.config import settings
 from dks_mod.database import close_db, init_db
@@ -37,12 +42,51 @@ async def lifespan(app: FastAPI):
     logger.info("DKS_mod shut down.")
 
 
+# Rate limiter — keyed by client IP (Cloudflare passes real IP via CF-Connecting-IP)
+def _get_real_ip(request: Request) -> str:
+    """Extract real client IP, respecting Cloudflare headers."""
+    return (
+        request.headers.get("CF-Connecting-IP")
+        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        or get_remote_address(request)
+    )
+
+
+limiter = Limiter(key_func=_get_real_ip, default_limits=["60/minute"])
+
 app = FastAPI(
     title="DKS_mod",
     description="Fox3 DCS x Digital Kneeboard Simulator Integration API",
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    logger.warning("Rate limit exceeded for %s on %s", _get_real_ip(request), request.url.path)
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit exceeded. Try again later."},
+    )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all requests with client IP, method, path, and response time."""
+    start = time.time()
+    client_ip = _get_real_ip(request)
+    response = await call_next(request)
+    elapsed = (time.time() - start) * 1000
+    logger.info(
+        "%s %s %s -> %d (%.0fms)",
+        client_ip, request.method, request.url.path,
+        response.status_code, elapsed,
+    )
+    return response
+
 
 # Mount routers
 from dks_mod.auth import router as auth_router

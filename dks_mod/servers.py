@@ -1,7 +1,6 @@
-"""Server registry — manage the DCS server inventory."""
+"""Server registry -- manage the DCS server inventory."""
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -22,9 +21,10 @@ class ServerCreate(BaseModel):
     id: str  # e.g. "dcs-v9-66"
     name: str  # e.g. "Fox3 Training Server"
     ip: str  # Tailscale IP (used for gRPC/internal access)
-    public_ip: str | None = None  # Public IP (used for Olympus/external URLs)
+    public_ip: str | None = None  # Public IP (used for Olympus/RTT/external URLs)
     customer_id: str
     grpc_port: int = 50051
+    olympus_enabled: bool = False  # True only if customer has purchased Olympus add-on
     olympus_port: int = 3000
     tacview_path: str | None = None
 
@@ -36,6 +36,7 @@ class ServerInfo(BaseModel):
     public_ip: str | None
     customer_id: str
     grpc_port: int
+    olympus_enabled: bool
     olympus_port: int
     tacview_path: str | None
     active: bool
@@ -51,35 +52,35 @@ async def register_server(body: ServerCreate, _=Depends(verify_admin_key)):
     """Register a new DCS server (admin only). Starts gRPC stream automatically."""
     db = await get_db()
 
-    # Upsert — update if exists, insert if not
+    # Upsert -- update if exists, insert if not
     existing = await db.execute_fetchall(
         "SELECT id FROM servers WHERE id = ?", (body.id,)
     )
     if existing:
         await db.execute(
             "UPDATE servers SET name=?, ip=?, public_ip=?, customer_id=?, grpc_port=?, "
-            "olympus_port=?, tacview_path=?, active=1 WHERE id=?",
+            "olympus_enabled=?, olympus_port=?, tacview_path=?, active=1 WHERE id=?",
             (body.name, body.ip, body.public_ip, body.customer_id, body.grpc_port,
-             body.olympus_port, body.tacview_path, body.id)
+             int(body.olympus_enabled), body.olympus_port, body.tacview_path, body.id)
         )
     else:
         await db.execute(
-            "INSERT INTO servers (id, name, ip, public_ip, customer_id, grpc_port, olympus_port, tacview_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO servers "
+            "(id, name, ip, public_ip, customer_id, grpc_port, olympus_enabled, olympus_port, tacview_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (body.id, body.name, body.ip, body.public_ip, body.customer_id, body.grpc_port,
-             body.olympus_port, body.tacview_path)
+             int(body.olympus_enabled), body.olympus_port, body.tacview_path)
         )
     await db.commit()
 
-    # Start gRPC stream for this server
     await start_stream_for_server(body.id, body.ip, body.grpc_port)
 
     logger.info("Registered server %s (%s) at %s:%d", body.id, body.name, body.ip, body.grpc_port)
     return ServerInfo(
         id=body.id, name=body.name, ip=body.ip, public_ip=body.public_ip,
         customer_id=body.customer_id, grpc_port=body.grpc_port,
-        olympus_port=body.olympus_port, tacview_path=body.tacview_path,
-        active=True, stream_status="running",
+        olympus_enabled=body.olympus_enabled, olympus_port=body.olympus_port,
+        tacview_path=body.tacview_path, active=True, stream_status="running",
     )
 
 
@@ -88,7 +89,8 @@ async def list_servers(_=Depends(verify_admin_key)):
     """List all registered servers with stream status (admin only)."""
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT id, name, ip, public_ip, customer_id, grpc_port, olympus_port, tacview_path, active "
+        "SELECT id, name, ip, public_ip, customer_id, grpc_port, "
+        "olympus_enabled, olympus_port, tacview_path, active "
         "FROM servers ORDER BY customer_id, id"
     )
     statuses = get_stream_status()
@@ -97,6 +99,7 @@ async def list_servers(_=Depends(verify_admin_key)):
             ServerInfo(
                 id=r["id"], name=r["name"], ip=r["ip"], public_ip=r["public_ip"],
                 customer_id=r["customer_id"], grpc_port=r["grpc_port"],
+                olympus_enabled=bool(r["olympus_enabled"]),
                 olympus_port=r["olympus_port"], tacview_path=r["tacview_path"],
                 active=bool(r["active"]),
                 stream_status=statuses.get(r["id"], "not_started"),
@@ -137,4 +140,3 @@ async def activate_server(server_id: str, _=Depends(verify_admin_key)):
     server = dict(rows[0])
     await start_stream_for_server(server["id"], server["ip"], server["grpc_port"])
     return {"status": "activated", "server_id": server_id}
-

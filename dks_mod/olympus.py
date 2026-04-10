@@ -19,23 +19,25 @@ async def get_olympus_access(
 ):
     """Get DCS Olympus URL and credentials for a server.
 
-    Olympus runs behind nginx (OlympusFix) on port 3000 on the public IP.
-    Credentials are stored in olympus.json on each VM.
+    Returns 404 if the server does not have the Olympus add-on.
+    Olympus runs behind nginx on port 3000 on the public IP.
     """
     require_server_access(server_id, token)
 
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT ip, public_ip, olympus_port FROM servers WHERE id = ?", (server_id,)
+        "SELECT ip, public_ip, olympus_enabled, olympus_port FROM servers WHERE id = ?",
+        (server_id,)
     )
     if not rows:
         raise HTTPException(404, f"Server {server_id} not found")
 
     server = dict(rows[0])
-    olympus_port = server["olympus_port"] or 3000
 
-    # Use public_ip for the Olympus URL so external clients can reach it.
-    # Fall back to ip if public_ip not set (Tailscale-only deployments).
+    if not server["olympus_enabled"]:
+        raise HTTPException(404, "Olympus is not provisioned for this server")
+
+    olympus_port = server["olympus_port"] or 3000
     access_ip = server["public_ip"] or server["ip"]
 
     # TODO: Retrieve actual credentials from the VM's olympus.json

@@ -79,9 +79,13 @@ async def init_db():
     """)
     await db.commit()
 
-    # Migrate existing servers table to add public_ip if not present
-    try:
-        await db.execute("ALTER TABLE servers ADD COLUMN public_ip TEXT")
-        await db.commit()
-    except Exception:
-        pass  # Column already exists
+    # Migrate existing servers table -- add columns if not present
+    for migration in [
+        "ALTER TABLE servers ADD COLUMN public_ip TEXT",
+        "ALTER TABLE servers ADD COLUMN olympus_enabled INTEGER DEFAULT 0",
+    ]:
+        try:
+            await db.execute(migration)
+            await db.commit()
+        except Exception:
+            pass  # Column already exists

@@ -1,6 +1,5 @@
 """DCS Olympus credential retrieval."""
 
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,14 +19,14 @@ async def get_olympus_access(
 ):
     """Get DCS Olympus URL and credentials for a server.
 
-    Olympus runs behind nginx (OlympusFix) on port 3000.
+    Olympus runs behind nginx (OlympusFix) on port 3000 on the public IP.
     Credentials are stored in olympus.json on each VM.
     """
     require_server_access(server_id, token)
 
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT ip, olympus_port FROM servers WHERE id = ?", (server_id,)
+        "SELECT ip, public_ip, olympus_port FROM servers WHERE id = ?", (server_id,)
     )
     if not rows:
         raise HTTPException(404, f"Server {server_id} not found")
@@ -35,23 +34,18 @@ async def get_olympus_access(
     server = dict(rows[0])
     olympus_port = server["olympus_port"] or 3000
 
-    # TODO: Retrieve actual credentials from the VM's olympus.json
-    # Implementation pattern:
-    # 1. SSH/WinRM to server IP
-    # 2. Read %USERPROFILE%\Saved Games\DCS...\Config\olympus.json
-    # 3. Extract frontend.gameMasterPassword (plaintext, pre-hash)
-    #    OR maintain a credential mapping in the DKS_mod database
-    #
-    # For customer servers, the Olympus password is typically set during
-    # Fox3ServerStart.bat boot sequence and stored in olympus.json.
-    #
-    # Security note: Olympus grants GCI/game master control.
-    # Consider scoping access (read-only blue view vs full control).
+    # Use public_ip for the Olympus URL so external clients can reach it.
+    # Fall back to ip if public_ip not set (Tailscale-only deployments).
+    access_ip = server["public_ip"] or server["ip"]
 
-    # Placeholder — credentials will come from VM or local DB
+    # TODO: Retrieve actual credentials from the VM's olympus.json
+    # 1. WinRM to server ip (Tailscale)
+    # 2. Read Saved Games\DCS...\Config\olympus.json
+    # 3. Extract frontend.gameMasterPassword
+
     return OlympusAccess(
         server_id=server_id,
-        url=f"http://{server['ip']}:{olympus_port}",
-        username="blue",  # default Olympus role
+        url=f"http://{access_ip}:{olympus_port}",
+        username="blue",
         password="",  # TODO: retrieve from VM
     )

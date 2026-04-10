@@ -65,11 +65,23 @@ async def init_db():
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             ip TEXT NOT NULL,
+            public_ip TEXT,
             customer_id TEXT NOT NULL,
             grpc_port INTEGER DEFAULT 50051,
             olympus_port INTEGER DEFAULT 3000,
             tacview_path TEXT,
             active INTEGER DEFAULT 1
         );
+
+        -- Add public_ip column if upgrading from older schema
+        -- SQLite ignores duplicate column errors only via separate execute, not executescript
+
     """)
     await db.commit()
+
+    # Migrate existing servers table to add public_ip if not present
+    try:
+        await db.execute("ALTER TABLE servers ADD COLUMN public_ip TEXT")
+        await db.commit()
+    except Exception:
+        pass  # Column already exists

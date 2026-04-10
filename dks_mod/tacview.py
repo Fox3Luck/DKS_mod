@@ -2,13 +2,10 @@
 
 import hashlib
 import hmac
-import json
 import logging
 import time
-from datetime import datetime
-from pathlib import PureWindowsPath
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from dks_mod.auth import get_current_token, require_server_access
 from dks_mod.config import settings
@@ -20,6 +17,9 @@ router = APIRouter(prefix="/servers", tags=["tacview"])
 
 # Default Tacview path on DCS VMs (relative to user profile)
 DEFAULT_TACVIEW_PATH = r"Saved Games\DCS.openbeta_server\Tacview"
+
+# Tacview RTT default port (matches DCS server default)
+TACVIEW_RTT_PORT = 42674
 
 
 def _generate_signed_url(server_id: str, filename: str) -> str:
@@ -64,18 +64,9 @@ async def list_tacview_files(
     server = dict(rows[0])
     tacview_path = server["tacview_path"] or DEFAULT_TACVIEW_PATH
 
-    # TODO: Connect to VM via SMB/SSH and list .acmi/.zip files
-    # For now, return the structure that will be populated when VM access is wired up
-    #
-    # Implementation pattern:
-    # 1. SSH/WinRM to server IP
-    # 2. List files in tacview_path
-    # 3. Get file metadata (size, creation date)
-    # 4. Generate signed download URLs
-
+    # TODO: Connect to VM via WinRM and list .acmi/.zip files
     logger.info("Listing Tacview files for server %s at %s", server_id, server["ip"])
 
-    # Placeholder — will be populated by VM file listing
     return TacviewFileList(server_id=server_id, files=[])
 
 
@@ -90,7 +81,6 @@ async def download_tacview_file(
     if not _verify_signed_url(server_id, file, expires, sig):
         raise HTTPException(403, "Invalid or expired download link")
 
-    # Validate filename to prevent path traversal
     if ".." in file or "/" in file or "\\" in file:
         raise HTTPException(400, "Invalid filename")
 
@@ -101,18 +91,7 @@ async def download_tacview_file(
     if not rows:
         raise HTTPException(404, f"Server {server_id} not found")
 
-    server = dict(rows[0])
-    tacview_path = server["tacview_path"] or DEFAULT_TACVIEW_PATH
-
-    # TODO: Fetch file from VM via SMB/SSH and stream it back
-    # Implementation pattern:
-    # 1. Connect to VM SMB share or SSH
-    # 2. Read file from tacview_path/file
-    # 3. Stream response with appropriate content-type
-    #
-    # return StreamingResponse(file_stream, media_type="application/octet-stream",
-    #     headers={"Content-Disposition": f"attachment; filename={file}"})
-
+    # TODO: Fetch file from VM via WinRM and stream it back
     raise HTTPException(501, "Tacview file download not yet wired to VM access")
 
 
@@ -121,27 +100,29 @@ async def get_rtt_status(
     server_id: str,
     token: dict = Depends(get_current_token),
 ):
-    """Get Tacview Real-Time Telemetry status for a server."""
+    """Get Tacview Real-Time Telemetry status for a server.
+
+    RTT is enabled by default on all Fox3 DCS servers (options.lua).
+    Host is the server's public IP; port is the standard Tacview RTT port 42674.
+    """
     require_server_access(server_id, token)
 
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT ip FROM servers WHERE id = ?", (server_id,)
+        "SELECT ip, public_ip FROM servers WHERE id = ?", (server_id,)
     )
     if not rows:
         raise HTTPException(404, f"Server {server_id} not found")
 
     server = dict(rows[0])
-
-    # TODO: SSH to VM, read TacViewOptions.lua, check RTT settings
-    # Parse: tacviewRealTimeTelemetryEnabled = true/false
-    # Parse: tacviewRealTimeTelemetryPort = 42674
+    # RTT clients connect via the public IP, not Tailscale
+    host = server["public_ip"] or server["ip"]
 
     return TacviewRTTStatus(
         server_id=server_id,
-        enabled=False,  # placeholder
-        host=server["ip"],
-        port=42674,  # default Tacview RTT port
+        enabled=True,
+        host=host,
+        port=TACVIEW_RTT_PORT,
     )
 
 
@@ -151,37 +132,29 @@ async def toggle_rtt(
     body: TacviewRTTToggle,
     token: dict = Depends(get_current_token),
 ):
-    """Enable or disable Tacview Real-Time Telemetry on a server."""
+    """Enable or disable Tacview Real-Time Telemetry on a server.
+
+    NOTE: RTT toggling via API is not yet implemented. The endpoint
+    returns the requested state but does not modify the server config.
+    RTT is enabled by default on all Fox3 servers.
+    """
     require_server_access(server_id, token)
 
     db = await get_db()
     rows = await db.execute_fetchall(
-        "SELECT ip FROM servers WHERE id = ?", (server_id,)
+        "SELECT ip, public_ip FROM servers WHERE id = ?", (server_id,)
     )
     if not rows:
         raise HTTPException(404, f"Server {server_id} not found")
 
     server = dict(rows[0])
+    host = server["public_ip"] or server["ip"]
 
-    # TODO: SSH to VM and modify TacViewOptions.lua
-    # Or use file-based C2: drop a trigger file that the VM's update.bat processes
-    #
-    # Pattern:
-    # 1. SSH to server IP
-    # 2. Modify Saved Games\DCS...\Config\TacViewOptions.lua
-    #    Set tacviewRealTimeTelemetryEnabled = true/false
-    # 3. May require mission restart for changes to take effect
-    #
-    # File-based C2 alternative:
-    # 1. Write .rtt-enable or .rtt-disable trigger file to ServerControl/
-    # 2. Nextcloud syncs to VM
-    # 3. update.bat or dedicated script processes trigger
-
-    logger.info("RTT toggle for %s: enabled=%s", server_id, body.enabled)
+    logger.info("RTT toggle requested for %s: enabled=%s (not yet implemented)", server_id, body.enabled)
 
     return TacviewRTTStatus(
         server_id=server_id,
         enabled=body.enabled,
-        host=server["ip"],
-        port=42674,
+        host=host,
+        port=TACVIEW_RTT_PORT,
     )

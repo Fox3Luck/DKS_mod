@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # Tacview signed URL expiry
     tacview_url_expiry: int = 3600  # seconds (1 hour)
 
+    # fox3-agent key (same value used by portal service)
+    agent_key: str = os.environ.get(
+        "FOX3_AGENT_KEY",
+        "3f88db85c7d3cb3fea5cd89be208d3a2b4cf49378c8e64cca24b8f3fdb36a707",
+    )
+
     # DCS-gRPC default port on VMs
     grpc_port: int = 50051
 

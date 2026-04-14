@@ -4,8 +4,11 @@ import hashlib
 import hmac
 import logging
 import time
+from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from dks_mod.auth import get_current_token, require_server_access
 from dks_mod.config import settings
@@ -20,6 +23,9 @@ DEFAULT_TACVIEW_PATH = r"Saved Games\DCS.openbeta_server\Tacview"
 
 # Tacview RTT default port (matches DCS server default)
 TACVIEW_RTT_PORT = 42674
+
+# fox3-agent HTTP port on each DCS VM
+AGENT_PORT = 2025
 
 
 def _generate_signed_url(server_id: str, filename: str) -> str:
@@ -62,12 +68,33 @@ async def list_tacview_files(
         raise HTTPException(404, f"Server {server_id} not found")
 
     server = dict(rows[0])
-    tacview_path = server["tacview_path"] or DEFAULT_TACVIEW_PATH
+    agent_url = f"http://{server['ip']}:{AGENT_PORT}/acmi"
 
-    # TODO: Connect to VM via WinRM and list .acmi/.zip files
-    logger.info("Listing Tacview files for server %s at %s", server_id, server["ip"])
+    logger.info("Listing Tacview files for server %s via agent at %s", server_id, agent_url)
 
-    return TacviewFileList(server_id=server_id, files=[])
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(agent_url)
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException:
+        raise HTTPException(504, "Agent on server did not respond in time")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(502, f"Agent returned {exc.response.status_code}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Agent unreachable: {exc}")
+
+    files = []
+    for f in data.get("files", []):
+        files.append(TacviewFile(
+            filename=f["name"],
+            size_bytes=f["size"],
+            created_at=datetime.fromisoformat(f["modified"].replace("Z", "+00:00")),
+            duration_seconds=None,
+            download_url=_generate_signed_url(server_id, f["name"]),
+        ))
+
+    return TacviewFileList(server_id=server_id, files=files)
 
 
 @router.get("/{server_id}/tacview/download")
@@ -91,8 +118,31 @@ async def download_tacview_file(
     if not rows:
         raise HTTPException(404, f"Server {server_id} not found")
 
-    # TODO: Fetch file from VM via WinRM and stream it back
-    raise HTTPException(501, "Tacview file download not yet wired to VM access")
+    server = dict(rows[0])
+    ip = server["ip"]
+
+    # Stream the file from the fox3-agent files endpoint.
+    # Agent files root is Missions\; Tacview recordings live in Missions\Tacview\.
+    agent_url = f"http://{ip}:{AGENT_PORT}/files/download"
+    agent_headers = {"X-Agent-Key": settings.agent_key}
+    agent_params = {"path": f"Tacview\\{file}"}
+
+    logger.info("Streaming Tacview file %s for server %s from agent %s", file, server_id, ip)
+
+    async def _stream():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream(
+                "GET", agent_url, params=agent_params, headers=agent_headers
+            ) as r:
+                r.raise_for_status()
+                async for chunk in r.aiter_bytes(65536):
+                    yield chunk
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{file}"'},
+    )
 
 
 @router.get("/{server_id}/tacview/rtt", response_model=TacviewRTTStatus)

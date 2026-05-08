@@ -11,7 +11,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from dks_mod.database import get_db
-from dks_mod.models import TokenCreate, TokenInfo, TokenResponse
+from dks_mod.models import TokenCreate, TokenInfo, TokenResponse, TokenUpdate
 
 router = APIRouter(prefix="/tokens", tags=["auth"])
 
@@ -95,6 +95,38 @@ async def create_token(request: Request, body: TokenCreate, _=Depends(verify_adm
         server_ids=body.server_ids,
         description=body.description,
         created_at=datetime.fromisoformat(now),
+    )
+
+
+@router.patch("/{token_id}", response_model=TokenInfo)
+async def update_token(token_id: int, body: TokenUpdate, _=Depends(verify_admin_key)):
+    """Replace server_ids on an existing token without rotating the token value.
+
+    Used by the Fox3 customer-window bridge so toggling DKS on/off for a server
+    adds/removes it from the customer's token in place -- the customer's DKS app
+    config keeps working.
+    """
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, customer_id, description, created_at, last_used "
+        "FROM api_tokens WHERE id = ? AND revoked = 0",
+        (token_id,)
+    )
+    if not rows:
+        raise HTTPException(404, "Token not found or revoked")
+    await db.execute(
+        "UPDATE api_tokens SET server_ids = ? WHERE id = ?",
+        (json.dumps(body.server_ids), token_id)
+    )
+    await db.commit()
+    r = dict(rows[0])
+    return TokenInfo(
+        id=r["id"],
+        customer_id=r["customer_id"],
+        server_ids=body.server_ids,
+        description=r["description"],
+        created_at=datetime.fromisoformat(r["created_at"]),
+        last_used=datetime.fromisoformat(r["last_used"]) if r["last_used"] else None,
     )
 
 

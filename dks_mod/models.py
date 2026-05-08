@@ -32,6 +32,10 @@ class TokenInfo(BaseModel):
     last_used: datetime | None = None
 
 
+class TokenUpdate(BaseModel):
+    server_ids: list[str]
+
+
 # --- Webhooks ---
 
 class WebhookEventType(str, Enum):

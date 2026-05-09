@@ -1,5 +1,20 @@
 # DKS_mod - Fox3 DCS x Digital Kneeboard Simulator Integration API
 
+## FMC MCP Server
+
+The FMC (Fox3 Mesh Coordinator) MCP server is configured at `C:\Users\Administrator\.claude\mcp.json`.
+Server name: `fmc` | URL: `http://100.64.0.10:6300` | Agent: `claude-fox3custsystem`
+
+Available tools (use these instead of curl when possible):
+- `fmc_search_skills("keywords")` -- semantic skill search
+- `fmc_store_skill(name, description, category, tags)` -- register new procedures
+- `fmc_search_context("keywords")` -- ephemeral cross-agent findings
+- `fmc_store_context(title, content, share_type, tags)` -- share session findings
+- `fmc_stats()` -- mesh health overview
+
+Fallback (if MCP tools not loaded): `curl -s "http://100.64.0.10:6300/api/fmc/skills/semantic-search?q_param=KEYWORDS"`
+
+
 ## What This Is
 REST API service that exposes Fox3 DCS server data to Digital Kneeboard Simulator (DKS).
 Paid integration — DKS developer consumes these endpoints.

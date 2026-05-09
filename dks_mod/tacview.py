@@ -85,7 +85,7 @@ async def list_tacview_files(
         raise HTTPException(502, f"Agent unreachable: {exc}")
 
     files = []
-    for f in data.get("files", []):
+    for f in (data.get("files") or []):
         files.append(TacviewFile(
             filename=f["name"],
             size_bytes=f["size"],

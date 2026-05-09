@@ -3,7 +3,15 @@ __pycache__/
 *.pyo
 .env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
+
+# Runtime logs
+logs/*.log
+
+# Vendored binary tools
+nssm.exe
 .venv/
 venv/
 dist/
